@@ -14,12 +14,14 @@ Pluribus 为 Claude Code 订阅用户提供统一的 Anthropic Messages API 接�
 
 > 注意：本项目专注模拟客户端行为，将订阅服务转 API 功能。不包含用量统计，API 密钥分发等功能
 
+> 使用本项目的一切风险由用户自行承担。
+
 ## 快速开始
 
 ### 安装
 
 ```bash
-git clone https://github.com/yourusername/pluribus.git
+git clone https://github.com/Arasple/pluribus.git
 cd pluribus
 cargo build --release
 ```
