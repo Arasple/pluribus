@@ -89,9 +89,15 @@ async fn shutdown_signal() {
             .await;
     };
 
+    #[cfg(unix)]
     tokio::select! {
         _ = ctrl_c => {},
         _ = terminate => {},
+    }
+
+    #[cfg(not(unix))]
+    tokio::select! {
+        _ = ctrl_c => {},
     }
 
     tracing::info!("Shutdown signal received, starting graceful shutdown...");
