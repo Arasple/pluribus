@@ -1,0 +1,66 @@
+[package]
+name = "pluribus"
+version = "0.1.0"
+edition = "2021"
+description = "A lightweight, high-performance API gateway for Claude Code subscriptions"
+license = "MIT"
+repository = "https://github.com/yourusername/pluribus"
+keywords = ["claude", "anthropic", "api-gateway", "oauth", "proxy"]
+categories = ["web-programming", "command-line-utilities"]
+
+[dependencies]
+# HTTP Server
+axum = { version = "0.8", features = ["macros"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace", "cors", "timeout"] }
+
+# HTTP Client
+reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"], default-features = false }
+
+# Async runtime
+tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "fs", "macros", "io-util", "signal"] }
+tokio-stream = "0.1"
+futures = "0.3"
+async-trait = "0.1"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# Crypto
+sha2 = "0.10"
+rand = "0.9"
+base64 = "0.22"
+subtle = "2.5"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Error handling
+anyhow = "1"
+
+# Utilities
+bytes = "1"
+http = "1"
+urlencoding = "2"
+open = "5"
+dotenvy = "0.15"
+
+[dev-dependencies]
+tokio-test = "0.4"
+wiremock = "0.6"
+tempfile = "3"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
+opt-level = 3
+debug = false
+overflow-checks = false
