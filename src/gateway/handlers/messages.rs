@@ -1,17 +1,42 @@
 //! Messages API 处理器
 
-use axum::{body::Body, extract::State, http::Response, Json};
+use axum::{
+    body::Body,
+    extract::State,
+    http::{HeaderMap, Response},
+    Json,
+};
 use serde_json::Value;
 
 use crate::gateway::{handlers::error_response, state::AppState};
 use crate::providers::parse_anthropic_usage;
 use crate::utils::extract_model;
 
+/// 需要透传的 header 名称
+const PASSTHROUGH_HEADERS: &[&str] = &["anthropic-beta"];
+
 /// POST /anthropic/v1/messages 处理器
 pub async fn handle_anthropic_messages(
     State(state): State<AppState>,
-    Json(body): Json<Value>,
+    headers: HeaderMap,
+    Json(mut body): Json<Value>,
 ) -> axum::response::Response {
+    // 将需要透传的 headers 注入到 body 的 _passthrough_headers 字段
+    if let Some(obj) = body.as_object_mut() {
+        let mut passthrough = serde_json::Map::new();
+        for &name in PASSTHROUGH_HEADERS {
+            if let Some(value) = headers.get(name).and_then(|v| v.to_str().ok()) {
+                passthrough.insert(name.to_string(), Value::String(value.to_string()));
+            }
+        }
+        if !passthrough.is_empty() {
+            obj.insert(
+                "_passthrough_headers".to_string(),
+                Value::Object(passthrough),
+            );
+        }
+    }
+
     let result: anyhow::Result<Response<Body>> = async {
         // 轮询选择一个 provider
         let provider = state

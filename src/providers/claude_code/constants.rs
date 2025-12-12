@@ -21,23 +21,13 @@ pub const CLAUDE_CODE_OAUTH_SCOPES: &[&str] = &[
     "user:sessions:claude_code",
 ];
 
-const BETA_FLAGS_BASE: &[&str] = &[
-    "oauth-2025-04-20",
+/// Claude Code OAuth 需要的基础 beta flags
+pub const BETA_FLAGS_BASE: &[&str] = &[
     "claude-code-20250219",
+    "fine-grained-tool-streaming-2025-05-14",
     "interleaved-thinking-2025-05-14",
+    "oauth-2025-04-20",
 ];
-
-const BETA_FLAG_TOOL_STREAMING: &str = "fine-grained-tool-streaming-2025-05-14";
-
-pub fn beta_flags_with_tool_streaming(model: &str) -> String {
-    if model.to_lowercase().contains("haiku") {
-        BETA_FLAGS_BASE.join(",")
-    } else {
-        [BETA_FLAGS_BASE, &[BETA_FLAG_TOOL_STREAMING]]
-            .concat()
-            .join(",")
-    }
-}
 
 static CLAUDE_CODE_VERSION: OnceLock<String> = OnceLock::new();
 const CLAUDE_CODE_NPM_REGISTRY_URL: &str = "https://registry.npmjs.org/@anthropic-ai/claude-code";

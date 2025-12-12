@@ -5,25 +5,25 @@
 mod constants;
 pub mod oauth;
 
-use anyhow::{Context, Result};
-use async_trait::async_trait;
-use bytes::Bytes;
-use futures::{Stream, StreamExt};
-use http::{header, HeaderMap, HeaderValue};
-use reqwest::Client;
-use serde_json::Value;
-use std::path::PathBuf;
-use std::sync::OnceLock;
-use tokio::sync::{mpsc, Mutex};
-
-use crate::providers::claude_code::constants::ANTHROPIC_API_VERSION;
+use crate::providers::claude_code::constants::{ANTHROPIC_API_VERSION, BETA_FLAGS_BASE};
 use crate::providers::config;
 use crate::providers::{
     parse_anthropic_usage, AuthConfig, OAuthConfig, Provider, ProviderType, StreamingResponse,
     Usage,
 };
 use crate::utils::extract_model;
+use anyhow::{Context, Result};
+use async_trait::async_trait;
+use bytes::Bytes;
+use futures::{Stream, StreamExt};
+use http::{header, HeaderMap, HeaderValue};
+use reqwest::Client;
 use serde::Serialize;
+use serde_json::Value;
+use std::collections::BTreeSet;
+use std::path::PathBuf;
+use std::sync::OnceLock;
+use tokio::sync::{mpsc, Mutex};
 
 /// Rate limit 窗口信息
 #[derive(Debug, Clone, Default, Serialize)]
@@ -47,7 +47,7 @@ pub struct RateLimitInfo {
     pub updated_at: u64,
 }
 
-use constants::{beta_flags_with_tool_streaming, ANTHROPIC_API_URL};
+use constants::ANTHROPIC_API_URL;
 
 pub use constants::{get_claude_code_version, init_version};
 pub use oauth::perform_oauth_login;
@@ -165,6 +165,7 @@ impl ClaudeCodeProvider {
     fn ensure_stream_field(mut request: Value, stream: bool) -> Value {
         if let Some(obj) = request.as_object_mut() {
             obj.insert("stream".to_string(), Value::Bool(stream));
+            obj.remove("_passthrough_headers");
         }
         request
     }
@@ -172,9 +173,10 @@ impl ClaudeCodeProvider {
     /// 发送请求的公共逻辑
     async fn send_request(&self, request: Value, stream: bool) -> Result<reqwest::Response> {
         let access_token = self.get_valid_token().await?;
-        let model = extract_model(&request);
+        // 先从原始 request 构建 headers（包含透传的 headers）
+        let headers = build_headers(&access_token, &request)?;
+        // 再处理 body（会移除内部字段）
         let body = Self::ensure_stream_field(request, stream);
-        let headers = build_headers(&access_token, &model)?;
 
         let response = get_api_client()
             .post(ANTHROPIC_API_URL)
@@ -247,7 +249,20 @@ fn user_agent() -> String {
     format!("claude-code/{}", constants::get_claude_code_version())
 }
 
-fn build_headers(access_token: &str, model: &str) -> Result<HeaderMap> {
+/// 合并基础 flags 与透传 flags，生成最终的 anthropic-beta 值
+fn build_beta_value(data: &Value) -> String {
+    let mut flags: BTreeSet<&str> = BETA_FLAGS_BASE.iter().copied().collect();
+    if let Some(passed) = data
+        .get("_passthrough_headers")
+        .and_then(|h| h.get("anthropic-beta"))
+        .and_then(|v| v.as_str())
+    {
+        flags.extend(passed.split(',').map(str::trim).filter(|s| !s.is_empty()));
+    }
+    flags.into_iter().collect::<Vec<_>>().join(",")
+}
+
+fn build_headers(access_token: &str, data: &Value) -> Result<HeaderMap> {
     let mut map = HeaderMap::new();
 
     map.insert(
@@ -265,10 +280,10 @@ fn build_headers(access_token: &str, model: &str) -> Result<HeaderMap> {
         "anthropic-version",
         HeaderValue::from_static(ANTHROPIC_API_VERSION),
     );
+
     map.insert(
         "anthropic-beta",
-        HeaderValue::from_str(&beta_flags_with_tool_streaming(model))
-            .context("Invalid beta flags for header")?,
+        HeaderValue::from_str(&build_beta_value(data)).context("Invalid beta flags")?,
     );
 
     Ok(map)
