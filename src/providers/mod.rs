@@ -88,7 +88,11 @@ pub fn parse_anthropic_usage(response: &Value) -> Result<Usage> {
         .unwrap_or(0);
 
     // 如果任意值为0，返回错误
-    if input_tokens == 0 || output_tokens == 0 || cache_read_tokens == 0 || cache_creation_tokens == 0 {
+    if input_tokens == 0
+        || output_tokens == 0
+        || cache_read_tokens == 0
+        || cache_creation_tokens == 0
+    {
         return Err(anyhow::anyhow!("Usage contains zero values"));
     }
 
