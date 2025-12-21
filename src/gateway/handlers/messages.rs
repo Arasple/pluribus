@@ -75,7 +75,7 @@ pub async fn handle_anthropic_messages(
         } else {
             // 非流式请求
             let response_body = provider.send_message(body).await?;
-            let usage = parse_anthropic_usage(&response_body);
+            let usage = parse_anthropic_usage(&response_body).unwrap_or_default();
 
             tracing::info!(
                 provider = provider_name,

@@ -51,7 +51,7 @@ pub async fn refresh_token(refresh_token: &str) -> Result<OAuthConfig> {
 }
 
 async fn token_request(body: Value) -> Result<Value> {
-    let response = reqwest::Client::new()
+    let response = crate::utils::get_shared_client()
         .post(CLAUDE_CODE_OAUTH_TOKEN_URL)
         .json(&body)
         .send()

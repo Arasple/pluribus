@@ -1,4 +1,29 @@
-use std::time::{SystemTime, UNIX_EPOCH};
+use reqwest::Client;
+use std::sync::OnceLock;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+/// 是否禁用 TLS 验证（用于调试 mitmproxy 等场景）
+pub fn should_disable_tls_verify() -> bool {
+    std::env::var("PLURIBUS_DISABLE_TLS_VERIFY")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+/// 获取共享的 HTTP 客户端（用于一般请求，如 OAuth、版本查询等）
+static SHARED_CLIENT: OnceLock<Client> = OnceLock::new();
+
+pub fn get_shared_client() -> &'static Client {
+    SHARED_CLIENT.get_or_init(|| {
+        let mut builder = Client::builder().timeout(Duration::from_secs(30));
+
+        if should_disable_tls_verify() {
+            tracing::warn!("TLS certificate verification is DISABLED - for debugging only!");
+            builder = builder.danger_accept_invalid_certs(true);
+        }
+
+        builder.build().expect("Failed to create HTTP client")
+    })
+}
 
 /// 获取当前 Unix 时间戳（毫秒）
 ///

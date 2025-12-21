@@ -53,6 +53,7 @@ impl Usage {
 /// # 返回值
 ///
 /// 返回解析后的 `Usage` 结构，包含各类 token 用量统计
+/// 如果任意值为0，返回 `Err`
 ///
 /// # 说明
 ///
@@ -61,26 +62,42 @@ impl Usage {
 /// - output_tokens: 输出 token 数
 /// - cache_read_input_tokens: 缓存读取的 token 数
 /// - cache_creation_input_tokens: 缓存创建的 token 数
-pub fn parse_anthropic_usage(response: &Value) -> Usage {
-    let usage = response.get("usage");
-    Usage {
-        input_tokens: usage
-            .and_then(|u| u.get("input_tokens"))
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0),
-        output_tokens: usage
-            .and_then(|u| u.get("output_tokens"))
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0),
-        cache_read_tokens: usage
-            .and_then(|u| u.get("cache_read_input_tokens"))
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0),
-        cache_creation_tokens: usage
-            .and_then(|u| u.get("cache_creation_input_tokens"))
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0),
+pub fn parse_anthropic_usage(response: &Value) -> Result<Usage> {
+    let usage_obj = response
+        .get("usage")
+        .ok_or_else(|| anyhow::anyhow!("Missing usage field"))?;
+
+    let input_tokens = usage_obj
+        .get("input_tokens")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| anyhow::anyhow!("Missing or invalid input_tokens"))?;
+
+    let output_tokens = usage_obj
+        .get("output_tokens")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| anyhow::anyhow!("Missing or invalid output_tokens"))?;
+
+    let cache_read_tokens = usage_obj
+        .get("cache_read_input_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+
+    let cache_creation_tokens = usage_obj
+        .get("cache_creation_input_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+
+    // 如果任意值为0，返回错误
+    if input_tokens == 0 || output_tokens == 0 || cache_read_tokens == 0 || cache_creation_tokens == 0 {
+        return Err(anyhow::anyhow!("Usage contains zero values"));
     }
+
+    Ok(Usage {
+        input_tokens,
+        output_tokens,
+        cache_read_tokens,
+        cache_creation_tokens,
+    })
 }
 
 /// 流式响应

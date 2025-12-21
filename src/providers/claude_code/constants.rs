@@ -29,9 +29,12 @@ pub const BETA_FLAGS_BASE: &[&str] = &[
     "oauth-2025-04-20",
 ];
 
+/// 需要从用户请求中排除的 beta flags
+pub const BETA_FLAGS_EXCLUDE: &[&str] = &[];
+
 static CLAUDE_CODE_VERSION: OnceLock<String> = OnceLock::new();
 const CLAUDE_CODE_NPM_REGISTRY_URL: &str = "https://registry.npmjs.org/@anthropic-ai/claude-code";
-const CLAUDE_CODE_DEFAULT_VERSION: &str = "2.0.64";
+const CLAUDE_CODE_DEFAULT_VERSION: &str = "2.0.75";
 
 pub async fn init_version() -> Result<()> {
     let version = fetch_latest_version().await.unwrap_or_else(|e| {
@@ -55,7 +58,7 @@ pub fn get_claude_code_version() -> &'static str {
 }
 
 async fn fetch_latest_version() -> Result<String> {
-    let response: serde_json::Value = reqwest::Client::new()
+    let response: serde_json::Value = crate::utils::get_shared_client()
         .get(CLAUDE_CODE_NPM_REGISTRY_URL)
         .header("Accept", "application/json")
         .send()

@@ -5,13 +5,15 @@
 mod constants;
 pub mod oauth;
 
-use crate::providers::claude_code::constants::{ANTHROPIC_API_VERSION, BETA_FLAGS_BASE};
+use crate::providers::claude_code::constants::{
+    ANTHROPIC_API_VERSION, BETA_FLAGS_BASE, BETA_FLAGS_EXCLUDE,
+};
 use crate::providers::config;
 use crate::providers::{
     parse_anthropic_usage, AuthConfig, OAuthConfig, Provider, ProviderType, StreamingResponse,
     Usage,
 };
-use crate::utils::extract_model;
+use crate::utils::{extract_model, should_disable_tls_verify};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -63,12 +65,17 @@ static API_CLIENT: OnceLock<Client> = OnceLock::new();
 
 fn get_api_client() -> &'static Client {
     API_CLIENT.get_or_init(|| {
-        Client::builder()
+        let mut builder = Client::builder()
             .timeout(std::time::Duration::from_secs(API_TIMEOUT_SECS))
             .user_agent(user_agent())
-            .pool_max_idle_per_host(10)
-            .build()
-            .expect("Failed to create Claude API client")
+            .pool_max_idle_per_host(10);
+
+        if should_disable_tls_verify() {
+            tracing::warn!("TLS certificate verification is DISABLED - for debugging only!");
+            builder = builder.danger_accept_invalid_certs(true);
+        }
+
+        builder.build().expect("Failed to create Claude API client")
     })
 }
 
@@ -247,6 +254,7 @@ impl Provider for ClaudeCodeProvider {
 
 fn user_agent() -> String {
     format!("claude-code/{}", constants::get_claude_code_version())
+    // "claude-relay-service/1.0".to_owned()
 }
 
 /// 合并基础 flags 与透传 flags，生成最终的 anthropic-beta 值
@@ -257,7 +265,12 @@ fn build_beta_value(data: &Value) -> String {
         .and_then(|h| h.get("anthropic-beta"))
         .and_then(|v| v.as_str())
     {
-        flags.extend(passed.split(',').map(str::trim).filter(|s| !s.is_empty()));
+        flags.extend(
+            passed
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty() && !BETA_FLAGS_EXCLUDE.contains(s)),
+        );
     }
     flags.into_iter().collect::<Vec<_>>().join(",")
 }
@@ -315,11 +328,15 @@ async fn relay_stream(
                                 match event_type {
                                     "message_start" => {
                                         if let Some(msg) = data.get("message") {
-                                            usage.merge_from(&parse_anthropic_usage(msg));
+                                            if let Ok(parsed_usage) = parse_anthropic_usage(msg) {
+                                                usage.merge_from(&parsed_usage);
+                                            }
                                         }
                                     }
                                     "message_delta" => {
-                                        usage.merge_from(&parse_anthropic_usage(&data));
+                                        if let Ok(parsed_usage) = parse_anthropic_usage(&data) {
+                                            usage.merge_from(&parsed_usage);
+                                        }
                                     }
                                     _ => {}
                                 }
