@@ -10,6 +10,7 @@ pub use state::AppState;
 
 use anyhow::Result;
 use axum::{
+    extract::DefaultBodyLimit,
     http::StatusCode,
     middleware as axum_middleware,
     routing::{get, post},
@@ -25,6 +26,7 @@ use crate::config::Config;
 use crate::providers::{self, claude_code};
 
 const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 300;
+const MAX_REQUEST_BODY_SIZE: usize = 32 * 1024 * 1024;
 
 pub async fn serve(config: Config) -> Result<()> {
     claude_code::init_version().await?;
@@ -64,6 +66,7 @@ fn build_router(state: AppState, config: &Config) -> Router {
         .merge(public_routes)
         .layer(
             ServiceBuilder::new()
+                .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_SIZE))
                 .layer(axum_middleware::from_fn(middleware::request_logger))
                 .layer(TraceLayer::new_for_http())
                 .layer(TimeoutLayer::with_status_code(
