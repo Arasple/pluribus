@@ -74,7 +74,7 @@ pub async fn handle_anthropic_messages(
     inject_claude_code_prompt(&mut body);
 
     let result: anyhow::Result<Response<Body>> = async {
-        // 轮询选择一个 provider
+        // 按优先级选择一个可用的 provider
         let provider = state
             .get_next_provider(|p| p.provider_type().is_anthropic())
             .ok_or_else(|| anyhow::anyhow!("No provider available. Run 'pluribus login' first."))?;

@@ -1,6 +1,5 @@
 //! Gateway 应用状态
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use crate::providers::Provider;
@@ -9,7 +8,6 @@ use crate::providers::Provider;
 #[derive(Clone)]
 pub struct AppState {
     providers: Arc<Vec<Arc<dyn Provider>>>,
-    counter: Arc<AtomicUsize>,
 }
 
 const UTILIZATION_THRESHOLD: f64 = 0.995;
@@ -30,7 +28,6 @@ impl AppState {
     pub fn new(providers: Vec<Arc<dyn crate::providers::Provider>>) -> Self {
         Self {
             providers: Arc::new(providers),
-            counter: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -38,22 +35,15 @@ impl AppState {
         &self.providers
     }
 
+    /// 按优先级顺序选择第一个可用的 provider
     pub fn get_next_provider<F>(&self, filter: F) -> Option<Arc<dyn crate::providers::Provider>>
     where
         F: FnMut(&&Arc<dyn crate::providers::Provider>) -> bool,
     {
-        let filtered: Vec<_> = self
-            .providers
+        self.providers
             .iter()
             .filter(|p| is_provider_available(p))
-            .filter(filter)
-            .collect();
-
-        if filtered.is_empty() {
-            return None;
-        }
-
-        let idx = self.counter.fetch_add(1, Ordering::Relaxed) % filtered.len();
-        Some(filtered[idx].clone())
+            .find(filter)
+            .cloned()
     }
 }
