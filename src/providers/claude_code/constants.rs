@@ -12,7 +12,8 @@ pub const ANTHROPIC_API_VERSION: &str = "2023-06-01";
 pub const CLAUDE_CODE_OAUTH_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 pub const CLAUDE_CODE_OAUTH_AUTHORIZE_URL: &str = "https://claude.ai/oauth/authorize";
 pub const CLAUDE_CODE_OAUTH_TOKEN_URL: &str = "https://console.anthropic.com/v1/oauth/token";
-pub const CLAUDE_CODE_OAUTH_REDIRECT_URI: &str = "urn:ietf:wg:oauth:2.0:oob";
+pub const CLAUDE_CODE_OAUTH_REDIRECT_URI: &str =
+    "https://console.anthropic.com/oauth/code/callback";
 
 pub const CLAUDE_CODE_OAUTH_SCOPES: &[&str] = &[
     "org:create_api_key",
@@ -74,6 +75,20 @@ async fn fetch_latest_version() -> Result<String> {
         .to_string())
 }
 
+/// 生成随机的 base64url 编码字符串
+pub fn generate_random_base64url() -> String {
+    let random_bytes: [u8; 32] = rand::rng().random();
+    URL_SAFE_NO_PAD.encode(random_bytes)
+}
+
+/// 对字符串进行 SHA256 哈希并返回 base64url 编码
+pub fn sha256_base64url(input: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(input.as_bytes());
+    let hash = hasher.finalize();
+    URL_SAFE_NO_PAD.encode(hash)
+}
+
 #[derive(Debug, Clone)]
 pub struct PkceChallenge {
     pub verifier: String,
@@ -82,13 +97,8 @@ pub struct PkceChallenge {
 
 impl PkceChallenge {
     pub fn generate() -> Self {
-        let random_bytes: [u8; 32] = rand::rng().random();
-        let verifier = URL_SAFE_NO_PAD.encode(random_bytes);
-
-        let mut hasher = Sha256::new();
-        hasher.update(verifier.as_bytes());
-        let hash = hasher.finalize();
-        let challenge = URL_SAFE_NO_PAD.encode(hash);
+        let verifier = generate_random_base64url();
+        let challenge = sha256_base64url(&verifier);
 
         Self {
             verifier,

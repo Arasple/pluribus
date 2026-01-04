@@ -50,6 +50,7 @@ http = "1"
 urlencoding = "2"
 open = "5"
 dotenvy = "0.15"
+dirs = "6"
 
 [dev-dependencies]
 tokio-test = "0.4"

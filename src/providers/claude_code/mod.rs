@@ -253,7 +253,7 @@ impl Provider for ClaudeCodeProvider {
 }
 
 fn user_agent() -> String {
-    format!("pluribus-proxy/{}", constants::get_claude_code_version())
+    format!("claude-code/{}", constants::get_claude_code_version())
 }
 
 /// 合并基础 flags 与透传 flags，生成最终的 anthropic-beta 值
