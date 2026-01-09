@@ -20,17 +20,15 @@ const CLAUDE_CODE_IDENTITY: &str = "You are Claude Code";
 
 /// 注入 Claude Code 身份提示词
 fn inject_claude_code_prompt(body: &mut Value) {
-    let system = match body.get_mut("system") {
-        Some(s) => s,
-        None => return,
+    let system = body
+        .as_object_mut()
+        .and_then(|obj| obj.get_mut("system"))
+        .and_then(|s| s.as_array_mut());
+
+    let Some(system_arr) = system else {
+        return;
     };
 
-    let system_arr = match system.as_array_mut() {
-        Some(arr) => arr,
-        None => return,
-    };
-
-    // 检查第一个元素是否包含 Claude Code 身份标识
     let needs_injection = system_arr
         .first()
         .and_then(|item| item.get("text"))
