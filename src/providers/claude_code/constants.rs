@@ -16,7 +16,6 @@ pub const CLAUDE_CODE_OAUTH_REDIRECT_URI: &str =
     "https://console.anthropic.com/oauth/code/callback";
 
 pub const CLAUDE_CODE_OAUTH_SCOPES: &[&str] = &[
-    "org:create_api_key",
     "user:profile",
     "user:inference",
     "user:sessions:claude_code",

@@ -12,12 +12,26 @@ pub struct AppState {
 
 const UTILIZATION_THRESHOLD: f64 = 0.995;
 
+/// 检查单个窗口是否可用
+/// 如果利用率超过阈值，但已过重置时间，仍视为可用
+fn is_window_available(window: &crate::providers::RateLimitWindow) -> bool {
+    if window.utilization <= UTILIZATION_THRESHOLD {
+        return true;
+    }
+    // 利用率超过阈值，检查是否已过重置时间
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    now >= window.reset
+}
+
 fn is_provider_available(provider: &Arc<dyn crate::providers::Provider>) -> bool {
     if let Some(rate_limit) = provider.rate_limit_info() {
-        if rate_limit.seven_day.utilization > UTILIZATION_THRESHOLD {
+        if !is_window_available(&rate_limit.seven_day) {
             return false;
         }
-        if rate_limit.five_hour.utilization > UTILIZATION_THRESHOLD {
+        if !is_window_available(&rate_limit.five_hour) {
             return false;
         }
     }

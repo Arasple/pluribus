@@ -14,7 +14,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use claude_code::ClaudeCodeProvider;
-pub use claude_code::RateLimitInfo;
+pub use claude_code::{RateLimitInfo, RateLimitWindow};
 pub use config::{save, AuthConfig, OAuthConfig, ProviderConfig, ProviderType};
 
 /// Token 使用统计
