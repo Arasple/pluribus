@@ -10,15 +10,15 @@ categories = ["web-programming", "command-line-utilities"]
 
 [dependencies]
 # HTTP Server
-axum = { version = "0.8", features = ["macros"] }
+axum = "0.8"
 tower = "0.5"
-tower-http = { version = "0.6", features = ["trace", "cors", "timeout"] }
+tower-http = { version = "0.6", features = ["trace", "timeout"] }
 
 # HTTP Client
 reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"], default-features = false }
 
 # Async runtime
-tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "fs", "macros", "io-util", "signal"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "fs", "macros", "signal"] }
 tokio-stream = "0.1"
 futures = "0.3"
 async-trait = "0.1"
@@ -36,7 +36,7 @@ subtle = "2.5"
 
 # Logging
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # CLI
 clap = { version = "4", features = ["derive"] }
@@ -48,7 +48,7 @@ anyhow = "1"
 bytes = "1"
 http = "1"
 urlencoding = "2"
-open = "5"
+
 dotenvy = "0.15"
 dirs = "6"
 regex = "1"
@@ -59,7 +59,7 @@ wiremock = "0.6"
 tempfile = "3"
 
 [profile.release]
-lto = "fat"
+lto = "thin"
 codegen-units = 1
 strip = "symbols"
 panic = "abort"

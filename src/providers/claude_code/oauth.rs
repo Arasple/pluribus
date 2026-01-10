@@ -251,10 +251,6 @@ pub async fn perform_oauth_login() -> Result<OAuthConfig> {
     println!("Open the following URL in your browser to authorize:");
     println!("{}\n", authorize_url);
 
-    if let Err(e) = open::that(&authorize_url) {
-        tracing::warn!("Failed to open browser: {}", e);
-    }
-
     loop {
         let code = match read_authorization_code() {
             Ok(code) => code,

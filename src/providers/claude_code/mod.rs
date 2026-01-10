@@ -4,6 +4,7 @@
 
 mod constants;
 pub mod oauth;
+mod tool_spoof;
 
 use crate::providers::claude_code::constants::{
     ANTHROPIC_API_VERSION, BETA_FLAGS_BASE, BETA_FLAGS_EXCLUDE,
@@ -59,9 +60,6 @@ const STREAM_CHANNEL_BUFFER: usize = 100;
 
 /// API 请求超时（秒）
 const API_TIMEOUT_SECS: u64 = 300;
-
-/// Tool 名称前缀，用于绕过 Anthropic 的第三方工具检测
-const TOOL_NAME_PREFIX: &str = "cc_";
 
 /// 共享的 API 客户端（带 user-agent）
 static API_CLIENT: OnceLock<Client> = OnceLock::new();
@@ -172,43 +170,6 @@ impl ClaudeCodeProvider {
         Ok(token)
     }
 
-    /// 给 tools 数组中的每个 tool 名称添加前缀，用于绕过 Anthropic 的检测
-    fn add_tool_prefix(mut request: Value) -> Value {
-        let tools = request
-            .as_object_mut()
-            .and_then(|obj| obj.get_mut("tools"))
-            .and_then(|tools| tools.as_array_mut());
-
-        if let Some(tools_array) = tools {
-            for tool in tools_array {
-                Self::prefix_tool_name(tool);
-            }
-        }
-
-        request
-    }
-
-    /// 给单个 tool 的 name 字段添加前缀
-    fn prefix_tool_name(tool: &mut Value) {
-        if let Some(obj) = tool.as_object_mut() {
-            if let Some(name) = obj.get("name").and_then(|n| n.as_str()) {
-                if !name.starts_with(TOOL_NAME_PREFIX) {
-                    obj.insert(
-                        "name".to_string(),
-                        Value::String(format!("{}{}", TOOL_NAME_PREFIX, name)),
-                    );
-                }
-            }
-        }
-    }
-
-    /// 从 tool 名称中移除前缀, 使用正则表达式替换
-    fn remove_tool_prefix(text: &str) -> String {
-        let pattern = format!(r#""name"\s*:\s*"{}([^"]+)""#, TOOL_NAME_PREFIX);
-        let re = regex::Regex::new(&pattern).unwrap();
-        re.replace_all(text, r#""name": "$1""#).to_string()
-    }
-
     fn ensure_stream_field(mut request: Value, stream: bool) -> Value {
         if let Some(obj) = request.as_object_mut() {
             obj.insert("stream".to_string(), Value::Bool(stream));
@@ -221,8 +182,8 @@ impl ClaudeCodeProvider {
     async fn send_request(&self, request: Value, stream: bool) -> Result<reqwest::Response> {
         let access_token = self.get_valid_token().await?;
 
-        // 给 tools 添加前缀，绕过 Anthropic 检测
-        let request = Self::add_tool_prefix(request);
+        // 伪装 tool 名称，绕过 Anthropic 检测
+        let request = tool_spoof::spoof(request);
         // 先从原始 request 构建 headers（包含透传的 headers）
         let headers = build_headers(&access_token, &request)?;
         // 再处理 body（会移除内部字段）
@@ -261,31 +222,6 @@ fn parse_sse_data(line: &str) -> Option<Value> {
         .and_then(|json_str| serde_json::from_str(json_str).ok())
 }
 
-/// 从响应的 content 数组中移除 tool 名称前缀
-fn remove_tool_prefix_from_response(response: &mut Value) {
-    let content = response
-        .as_object_mut()
-        .and_then(|obj| obj.get_mut("content"))
-        .and_then(|content| content.as_array_mut());
-
-    if let Some(content_array) = content {
-        for item in content_array {
-            strip_tool_prefix_from_item(item);
-        }
-    }
-}
-
-/// 从单个 content item 中移除 tool 名称前缀
-fn strip_tool_prefix_from_item(item: &mut Value) {
-    if let Some(obj) = item.as_object_mut() {
-        if let Some(name) = obj.get("name").and_then(|n| n.as_str()) {
-            if let Some(stripped) = name.strip_prefix(TOOL_NAME_PREFIX) {
-                obj.insert("name".to_string(), Value::String(stripped.to_string()));
-            }
-        }
-    }
-}
-
 #[async_trait]
 impl Provider for ClaudeCodeProvider {
     fn name(&self) -> &str {
@@ -303,7 +239,7 @@ impl Provider for ClaudeCodeProvider {
             .await
             .context("Failed to parse Claude API response")?;
 
-        remove_tool_prefix_from_response(&mut response_json);
+        tool_spoof::restore(&mut response_json);
         Ok(response_json)
     }
 
@@ -396,8 +332,8 @@ async fn relay_stream(
 
                 while let Some(pos) = buffer.find("\n\n") {
                     let event = &buffer[..pos];
-                    // 从 SSE 事件中移除 tool 前缀
-                    let event = ClaudeCodeProvider::remove_tool_prefix(event);
+                    // 还原 SSE 事件中的 tool 名称
+                    let event = tool_spoof::restore_text(event);
                     let event_with_newlines = format!("{}\n\n", event);
 
                     // 解析 SSE 事件提取 usage
@@ -441,7 +377,7 @@ async fn relay_stream(
     }
 
     if !buffer.is_empty() {
-        let buffer = ClaudeCodeProvider::remove_tool_prefix(&buffer);
+        let buffer = tool_spoof::restore_text(&buffer);
         let _ = tx.send(Ok(Bytes::from(buffer))).await;
     }
 
