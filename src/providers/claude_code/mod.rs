@@ -2,9 +2,9 @@
 //!
 //! 基于 OAuth 认证的 Claude Code 订阅 Provider
 
+pub mod anthropic_spoof;
 mod constants;
 pub mod oauth;
-mod tool_spoof;
 
 use crate::providers::claude_code::constants::{
     ANTHROPIC_API_VERSION, BETA_FLAGS_BASE, BETA_FLAGS_EXCLUDE,
@@ -183,7 +183,7 @@ impl ClaudeCodeProvider {
         let access_token = self.get_valid_token().await?;
 
         // 伪装 tool 名称，绕过 Anthropic 检测
-        let request = tool_spoof::spoof(request);
+        let request = anthropic_spoof::spoof_tools(request);
         // 先从原始 request 构建 headers（包含透传的 headers）
         let headers = build_headers(&access_token, &request)?;
         // 再处理 body（会移除内部字段）
@@ -239,7 +239,7 @@ impl Provider for ClaudeCodeProvider {
             .await
             .context("Failed to parse Claude API response")?;
 
-        tool_spoof::restore(&mut response_json);
+        anthropic_spoof::restore_tools(&mut response_json);
         Ok(response_json)
     }
 
@@ -333,7 +333,7 @@ async fn relay_stream(
                 while let Some(pos) = buffer.find("\n\n") {
                     let event = &buffer[..pos];
                     // 还原 SSE 事件中的 tool 名称
-                    let event = tool_spoof::restore_text(event);
+                    let event = anthropic_spoof::restore_tools_text(event);
                     let event_with_newlines = format!("{}\n\n", event);
 
                     // 解析 SSE 事件提取 usage
@@ -377,7 +377,7 @@ async fn relay_stream(
     }
 
     if !buffer.is_empty() {
-        let buffer = tool_spoof::restore_text(&buffer);
+        let buffer = anthropic_spoof::restore_tools_text(&buffer);
         let _ = tx.send(Ok(Bytes::from(buffer))).await;
     }
 
