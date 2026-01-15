@@ -15,6 +15,9 @@ const CLAUDE_CODE_IDENTITY: &str = "Claude Code";
 /// Claude Code 官方 system 提示词
 const CLAUDE_CODE_SYSTEM_PROMPT: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
 
+/// Claude Code 身份前缀（用于检测是否已包含官方身份）
+const CLAUDE_CODE_IDENTITY_PREFIX: &str = "You are Claude Code";
+
 /// 伪装 system 提示词
 ///
 /// 处理：
@@ -30,17 +33,16 @@ pub fn spoof_system(body: &mut Value) {
         return;
     };
 
-    // 1. 检查是否需要注入官方身份标识
+    // 1. 检查是否需要注入官方身份标识（如果已包含则跳过）
     let needs_injection = system_arr
         .first()
         .and_then(|item| item.get("text"))
         .and_then(|text| text.as_str())
-        .map(|text| text != CLAUDE_CODE_SYSTEM_PROMPT)
+        .map(|text| !text.starts_with(CLAUDE_CODE_IDENTITY_PREFIX))
         .unwrap_or(true);
 
     if needs_injection {
         let prompt = serde_json::json!({
-            "cache_control": { "type": "ephemeral" },
             "text": CLAUDE_CODE_SYSTEM_PROMPT,
             "type": "text"
         });
