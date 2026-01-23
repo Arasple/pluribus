@@ -21,7 +21,7 @@ use bytes::Bytes;
 use futures::{Stream, StreamExt};
 use http::{header, HeaderMap, HeaderValue};
 use reqwest::Client;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -29,7 +29,7 @@ use std::sync::OnceLock;
 use tokio::sync::{mpsc, Mutex};
 
 /// Rate limit 窗口信息
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RateLimitWindow {
     /// 状态: allowed, allowed_warning, rejected
     pub status: String,
@@ -40,7 +40,7 @@ pub struct RateLimitWindow {
 }
 
 /// Claude Code rate limit 信息
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RateLimitInfo {
     /// 5 小时窗口
     pub five_hour: RateLimitWindow,
@@ -89,11 +89,13 @@ pub struct ClaudeCodeProvider {
 
 impl ClaudeCodeProvider {
     pub fn new(providers_dir: PathBuf, name: String) -> Result<Self> {
+        let rate_limit_path = providers_dir.join(format!("{}.ratelimit.json", &name));
+        let rate_limit = Self::load_rate_limit_from_file(&rate_limit_path);
         Ok(Self {
             providers_dir,
             name,
             cached_oauth: Mutex::new(None),
-            rate_limit: std::sync::RwLock::new(RateLimitInfo::default()),
+            rate_limit: std::sync::RwLock::new(rate_limit),
         })
     }
 
@@ -130,8 +132,40 @@ impl ClaudeCodeProvider {
         };
 
         if let Ok(mut guard) = self.rate_limit.write() {
-            *guard = info;
+            *guard = info.clone();
         }
+        self.persist_rate_limit(&info);
+    }
+
+    /// Rate limit 持久化文件路径
+    fn rate_limit_path(&self) -> PathBuf {
+        self.providers_dir
+            .join(format!("{}.ratelimit.json", self.name))
+    }
+
+    /// 从文件加载 rate limit 信息（同步，用于初始化）
+    fn load_rate_limit_from_file(path: &PathBuf) -> RateLimitInfo {
+        match std::fs::read_to_string(path) {
+            Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
+            Err(_) => RateLimitInfo::default(),
+        }
+    }
+
+    /// 异步持久化 rate limit 信息到文件
+    fn persist_rate_limit(&self, info: &RateLimitInfo) {
+        let path = self.rate_limit_path();
+        let data = match serde_json::to_string(info) {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::warn!("Failed to serialize rate limit: {e}");
+                return;
+            }
+        };
+        tokio::spawn(async move {
+            if let Err(e) = tokio::fs::write(&path, data).await {
+                tracing::warn!("Failed to persist rate limit to {}: {e}", path.display());
+            }
+        });
     }
 
     /// 获取有效的 access token，必要时自动刷新
@@ -203,8 +237,10 @@ impl ClaudeCodeProvider {
             .await
             .context("Failed to send request to Claude API")?;
 
-        // 提取 rate limit 信息（无论成功与否）
-        self.update_rate_limit(response.headers());
+        // 提取 rate limit 信息（只有成功才更新）
+        if response.status().is_success() {
+            self.update_rate_limit(response.headers());
+        }
 
         let status = response.status();
         if !status.is_success() {
