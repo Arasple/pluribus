@@ -302,7 +302,10 @@ impl Provider for ClaudeCodeProvider {
 }
 
 fn user_agent() -> String {
-    format!("claude-code/{}", constants::get_claude_code_version())
+    format!(
+        "claude-cli/{} (external, cli)",
+        constants::get_claude_code_version()
+    )
 }
 
 /// 合并基础 flags 与透传 flags，生成最终的 anthropic-beta 值
@@ -337,6 +340,9 @@ fn build_headers(access_token: &str, data: &Value) -> Result<HeaderMap> {
         HeaderValue::from_static("application/json"),
     );
     map.insert(header::ACCEPT, HeaderValue::from_static("application/json"));
+
+    // Claude Code 标识 header
+    map.insert("x-app", HeaderValue::from_static("cli"));
 
     map.insert(
         "anthropic-version",

@@ -11,14 +11,14 @@ pub const ANTHROPIC_API_VERSION: &str = "2023-06-01";
 
 pub const CLAUDE_CODE_OAUTH_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 pub const CLAUDE_CODE_OAUTH_AUTHORIZE_URL: &str = "https://claude.ai/oauth/authorize";
-pub const CLAUDE_CODE_OAUTH_TOKEN_URL: &str = "https://console.anthropic.com/v1/oauth/token";
-pub const CLAUDE_CODE_OAUTH_REDIRECT_URI: &str =
-    "https://console.anthropic.com/oauth/code/callback";
+pub const CLAUDE_CODE_OAUTH_TOKEN_URL: &str = "https://platform.claude.com/v1/oauth/token";
+pub const CLAUDE_CODE_OAUTH_REDIRECT_URI: &str = "https://platform.claude.com/oauth/code/callback";
 
 pub const CLAUDE_CODE_OAUTH_SCOPES: &[&str] = &[
     "user:profile",
     "user:inference",
     "user:sessions:claude_code",
+    "user:mcp_servers",
 ];
 
 /// Claude Code OAuth 需要的基础 beta flags
@@ -27,6 +27,7 @@ pub const BETA_FLAGS_BASE: &[&str] = &[
     "fine-grained-tool-streaming-2025-05-14",
     "interleaved-thinking-2025-05-14",
     "oauth-2025-04-20",
+    // "context-management-2025-06-27",
 ];
 
 /// 需要从用户请求中排除的 beta flags
