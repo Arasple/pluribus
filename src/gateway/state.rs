@@ -10,7 +10,7 @@ pub struct AppState {
     providers: Arc<Vec<Arc<dyn Provider>>>,
 }
 
-const UTILIZATION_THRESHOLD: f64 = 0.995;
+const UTILIZATION_THRESHOLD: f64 = 0.99;
 
 /// 检查单个窗口是否可用
 /// 如果利用率超过阈值，但已过重置时间，仍视为可用

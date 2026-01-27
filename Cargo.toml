@@ -52,6 +52,7 @@ urlencoding = "2"
 dotenvy = "0.15"
 dirs = "6"
 regex = "1"
+natord = "1.0.9"
 
 [dev-dependencies]
 tokio-test = "0.4"

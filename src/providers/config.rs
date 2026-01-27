@@ -147,6 +147,7 @@ pub async fn load_all(dir: impl AsRef<Path>) -> Result<Vec<ProviderConfig>> {
         }
     }
 
+    configs.sort_by(|a, b| natord::compare(&a.name, &b.name));
     Ok(configs)
 }
 
