@@ -213,11 +213,15 @@ impl ClaudeCodeProvider {
     }
 
     /// 发送请求的公共逻辑
-    async fn send_request(&self, request: Value, stream: bool) -> Result<reqwest::Response> {
+    async fn send_request(
+        &self,
+        request: Value,
+        stream: bool,
+    ) -> Result<(reqwest::Response, bool)> {
         let access_token = self.get_valid_token().await?;
 
         // 伪装 tool 名称，绕过 Anthropic 检测
-        let request = anthropic_spoof::spoof_tools(request);
+        let (request, spoofed) = anthropic_spoof::spoof_tools(request);
         // 先从原始 request 构建 headers（包含透传的 headers）
         let headers = build_headers(&access_token, &request)?;
         // 再处理 body（会移除内部字段）
@@ -242,13 +246,7 @@ impl ClaudeCodeProvider {
             self.update_rate_limit(response.headers());
         }
 
-        let status = response.status();
-        if !status.is_success() {
-            let error_body = response.text().await.unwrap_or_default();
-            anyhow::bail!("Claude API error {}: {}", status, error_body);
-        }
-
-        Ok(response)
+        Ok((response, spoofed))
     }
 }
 
@@ -269,27 +267,53 @@ impl Provider for ClaudeCodeProvider {
     }
 
     async fn send_message(&self, request: Value) -> Result<Value> {
-        let response = self.send_request(request, false).await?;
+        let (response, spoofed) = self.send_request(request, false).await?;
+        let status = response.status();
         let mut response_json: Value = response
             .json()
             .await
             .context("Failed to parse Claude API response")?;
 
-        anthropic_spoof::restore_tools(&mut response_json);
+        if !status.is_success() {
+            tracing::error!(
+                provider = self.name.as_str(),
+                status = status.as_u16(),
+                body = %response_json,
+                "Claude API error response"
+            );
+        }
+
+        if spoofed {
+            anthropic_spoof::restore_tools(&mut response_json);
+        }
         Ok(response_json)
     }
 
     async fn send_streaming(&self, request: Value) -> Result<StreamingResponse> {
         let model = extract_model(&request);
-        let response = self.send_request(request, true).await?;
+        let (response, spoofed) = self.send_request(request, true).await?;
         let status = response.status();
+
+        if !status.is_success() {
+            let error_body = response.bytes().await.unwrap_or_default();
+            tracing::error!(
+                provider = self.name.as_str(),
+                status = status.as_u16(),
+                body = %String::from_utf8_lossy(&error_body),
+                "Claude API streaming error response"
+            );
+            let stream = Box::new(futures::stream::iter(std::iter::once(
+                Ok(error_body) as Result<Bytes, std::io::Error>
+            )));
+            return Ok(StreamingResponse { stream, status });
+        }
 
         let (tx, rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(STREAM_CHANNEL_BUFFER);
         let byte_stream = response.bytes_stream();
         let provider_name = self.name.clone();
 
         tokio::spawn(async move {
-            relay_stream(byte_stream, tx, &provider_name, &model).await;
+            relay_stream(byte_stream, tx, &provider_name, &model, spoofed).await;
         });
 
         let stream = Box::new(tokio_stream::wrappers::ReceiverStream::new(rx));
@@ -362,6 +386,7 @@ async fn relay_stream(
     tx: mpsc::Sender<std::result::Result<Bytes, std::io::Error>>,
     provider: &str,
     model: &str,
+    spoofed: bool,
 ) {
     let mut buffer = String::new();
     let mut pinned = Box::pin(upstream);
@@ -375,7 +400,11 @@ async fn relay_stream(
                 while let Some(pos) = buffer.find("\n\n") {
                     let event = &buffer[..pos];
                     // 还原 SSE 事件中的 tool 名称
-                    let event = anthropic_spoof::restore_tools_text(event);
+                    let event = if spoofed {
+                        anthropic_spoof::restore_tools_text(event)
+                    } else {
+                        event.to_string()
+                    };
                     let event_with_newlines = format!("{}\n\n", event);
 
                     // 解析 SSE 事件提取 usage
@@ -419,7 +448,11 @@ async fn relay_stream(
     }
 
     if !buffer.is_empty() {
-        let buffer = anthropic_spoof::restore_tools_text(&buffer);
+        let buffer = if spoofed {
+            anthropic_spoof::restore_tools_text(&buffer)
+        } else {
+            buffer
+        };
         let _ = tx.send(Ok(Bytes::from(buffer))).await;
     }
 

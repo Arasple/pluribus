@@ -6,12 +6,6 @@
 
 use serde_json::Value;
 
-/// OpenCode 身份标识
-const OPENCODE_IDENTITY: &str = "OpenCode";
-
-/// Claude Code 身份标识
-const CLAUDE_CODE_IDENTITY: &str = "Claude Code";
-
 /// Claude Code 官方 system 提示词
 const CLAUDE_CODE_SYSTEM_PROMPT: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
 
@@ -20,9 +14,7 @@ const CLAUDE_CODE_IDENTITY_PREFIX: &str = "You are Claude Code";
 
 /// 伪装 system 提示词
 ///
-/// 处理：
-/// 1. 在 system 数组开头注入官方身份标识
-/// 2. 替换 "OpenCode" -> "Claude Code"
+/// 在 system 数组开头注入官方身份标识
 pub fn spoof_system(body: &mut Value) {
     let Some(obj) = body.as_object_mut() else {
         return;
@@ -37,54 +29,70 @@ pub fn spoof_system(body: &mut Value) {
         return;
     };
 
-    // 1. 检查是否需要注入官方身份标识（如果已包含则跳过）
-    let needs_injection = system_arr
+    // 确保首个 block 为官方身份标识
+    let has_identity = system_arr
         .first()
         .and_then(|item| item.get("text"))
         .and_then(|text| text.as_str())
-        .map(|text| !text.starts_with(CLAUDE_CODE_IDENTITY_PREFIX))
-        .unwrap_or(true);
+        .is_some_and(|text| text.starts_with(CLAUDE_CODE_IDENTITY_PREFIX));
 
-    if needs_injection {
-        let prompt = serde_json::json!({
-            "text": CLAUDE_CODE_SYSTEM_PROMPT,
-            "type": "text"
-        });
-        system_arr.insert(0, prompt);
-    }
-
-    // 2. 替换 OpenCode -> Claude Code
-    for item in system_arr.iter_mut() {
-        let Some(text) = item.get_mut("text") else {
-            continue;
-        };
-        let Some(text_str) = text.as_str() else {
-            continue;
-        };
-        let replaced = text_str.replace(OPENCODE_IDENTITY, CLAUDE_CODE_IDENTITY);
-        if replaced != text_str {
-            *text = Value::String(replaced);
+    if has_identity {
+        // 已有身份 block，规范化文本
+        if let Some(text) = system_arr[0].get_mut("text") {
+            *text = Value::String(CLAUDE_CODE_SYSTEM_PROMPT.to_string());
         }
+    } else {
+        // 缺少身份 block，注入
+        system_arr.insert(
+            0,
+            serde_json::json!({
+                "text": CLAUDE_CODE_SYSTEM_PROMPT,
+                "type": "text"
+            }),
+        );
     }
 }
 
 /// 默认前缀
 const DEFAULT_PREFIX: &str = "cc_";
 
-/// 特殊映射规则：(原名称, 伪装名称)
+/// Claude Code 官方工具名称
+const CC_TOOLS: &[&str] = &[
+    "AskUserQuestion",
+    "Bash",
+    "Edit",
+    "EnterPlanMode",
+    "ExitPlanMode",
+    "Glob",
+    "Grep",
+    "NotebookEdit",
+    "Read",
+    "Skill",
+    "Task",
+    "TaskCreate",
+    "TaskGet",
+    "TaskList",
+    "TaskOutput",
+    "TaskStop",
+    "TaskUpdate",
+    "WebFetch",
+    "WebSearch",
+    "Write",
+];
+
+/// 第三方客户端 → Claude Code 名称映射
 const MAPPINGS: &[(&str, &str)] = &[
-    // OpenCode
     ("bash", "Bash"),
-    ("question", "AskUserQuestion"),
-    ("read", "Read"),
-    ("write", "Write"),
     ("edit", "Edit"),
     ("glob", "Glob"),
     ("grep", "Grep"),
-    ("task", "Task"),
-    ("webfetch", "WebFetch"),
-    ("todowrite", "TodoWrite"),
+    ("question", "AskUserQuestion"),
+    ("read", "Read"),
     ("skill", "Skill"),
+    ("task", "Task"),
+    ("todowrite", "TodoWrite"),
+    ("webfetch", "WebFetch"),
+    ("write", "Write"),
 ];
 
 /// 伪装请求中的 tool 名称
@@ -92,16 +100,21 @@ const MAPPINGS: &[(&str, &str)] = &[
 /// 处理：
 /// 1. tools 数组中的 tool 定义
 /// 2. messages 中的 tool_use 块
-pub fn spoof_tools(mut request: Value) -> Value {
+///
+/// 返回是否发生名称变换
+pub fn spoof_tools(mut request: Value) -> (Value, bool) {
     let obj = match request.as_object_mut() {
         Some(obj) => obj,
-        None => return request,
+        None => return (request, false),
     };
+    let mut changed = false;
 
     // 处理 tools 数组
     if let Some(tools) = obj.get_mut("tools").and_then(|t| t.as_array_mut()) {
         for tool in tools {
-            transform_name(tool, to_spoofed);
+            if transform_name(tool, to_spoofed) {
+                changed = true;
+            }
         }
     }
 
@@ -110,15 +123,15 @@ pub fn spoof_tools(mut request: Value) -> Value {
         for msg in messages {
             if let Some(content) = msg.get_mut("content").and_then(|c| c.as_array_mut()) {
                 for block in content {
-                    if is_tool_use_block(block) {
-                        transform_name(block, to_spoofed);
+                    if is_tool_use_block(block) && transform_name(block, to_spoofed) {
+                        changed = true;
                     }
                 }
             }
         }
     }
 
-    request
+    (request, changed)
 }
 
 /// 还原响应中的 tool 名称
@@ -143,7 +156,7 @@ pub fn restore_tools(response: &mut Value) {
 pub fn restore_tools_text(text: &str) -> String {
     let mut result = text.to_string();
 
-    // 还原特殊映射
+    // 还原显式映射
     for (original, spoofed) in MAPPINGS {
         let pattern = format!(r#""name"\s*:\s*"{}""#, regex::escape(spoofed));
         let replacement = format!(r#""name": "{}""#, original);
@@ -152,7 +165,7 @@ pub fn restore_tools_text(text: &str) -> String {
         }
     }
 
-    // 还原默认前缀
+    // 还原 cc_ 前缀（跳过已由显式映射处理的）
     let prefix_pattern = format!(r#""name"\s*:\s*"{}([^"]+)""#, DEFAULT_PREFIX);
     if let Ok(re) = regex::Regex::new(&prefix_pattern) {
         result = re.replace_all(&result, r#""name": "$1""#).to_string();
@@ -167,27 +180,34 @@ fn is_tool_use_block(block: &Value) -> bool {
 }
 
 /// 转换 name 字段
-fn transform_name(item: &mut Value, transformer: fn(&str) -> String) {
+fn transform_name(item: &mut Value, transformer: fn(&str) -> String) -> bool {
     let obj = match item.as_object_mut() {
         Some(obj) => obj,
-        None => return,
+        None => return false,
     };
 
     if let Some(name) = obj.get("name").and_then(|n| n.as_str()) {
         let new_name = transformer(name);
         if new_name != name {
             obj.insert("name".to_string(), Value::String(new_name));
+            return true;
         }
     }
+    false
 }
 
 /// 将原始名称转换为伪装名称
 fn to_spoofed(name: &str) -> String {
-    // 检查特殊映射
+    // 显式映射
     for (original, spoofed) in MAPPINGS {
         if name == *original {
             return spoofed.to_string();
         }
+    }
+
+    // 已是 CC 工具名称
+    if CC_TOOLS.contains(&name) {
+        return name.to_string();
     }
 
     // 默认：添加前缀（跳过已有前缀的）
@@ -200,7 +220,7 @@ fn to_spoofed(name: &str) -> String {
 
 /// 将伪装名称还原为原始名称
 fn to_original(name: &str) -> String {
-    // 检查特殊映射
+    // 显式映射
     for (original, spoofed) in MAPPINGS {
         if name == *spoofed {
             return original.to_string();
