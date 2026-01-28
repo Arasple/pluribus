@@ -10,11 +10,14 @@ pub struct AppState {
     providers: Arc<Vec<Arc<dyn Provider>>>,
 }
 
-const UTILIZATION_THRESHOLD: f64 = 0.99;
+const UTILIZATION_THRESHOLD: f64 = 0.98;
 
 /// 检查单个窗口是否可用
 /// 如果利用率超过阈值，但已过重置时间，仍视为可用
 fn is_window_available(window: &crate::providers::RateLimitWindow) -> bool {
+    if window.status == "allowed" {
+        return true;
+    }
     if window.utilization <= UTILIZATION_THRESHOLD {
         return true;
     }

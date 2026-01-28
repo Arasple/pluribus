@@ -35,7 +35,7 @@ pub const BETA_FLAGS_EXCLUDE: &[&str] = &[];
 
 static CLAUDE_CODE_VERSION: OnceLock<String> = OnceLock::new();
 const CLAUDE_CODE_NPM_REGISTRY_URL: &str = "https://registry.npmjs.org/@anthropic-ai/claude-code";
-const CLAUDE_CODE_DEFAULT_VERSION: &str = "2.0.75";
+const CLAUDE_CODE_DEFAULT_VERSION: &str = "2.1.22";
 
 pub async fn init_version() -> Result<()> {
     let version = fetch_latest_version().await.unwrap_or_else(|e| {

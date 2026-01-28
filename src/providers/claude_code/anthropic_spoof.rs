@@ -24,12 +24,16 @@ const CLAUDE_CODE_IDENTITY_PREFIX: &str = "You are Claude Code";
 /// 1. 在 system 数组开头注入官方身份标识
 /// 2. 替换 "OpenCode" -> "Claude Code"
 pub fn spoof_system(body: &mut Value) {
-    let system = body
-        .as_object_mut()
-        .and_then(|obj| obj.get_mut("system"))
-        .and_then(|s| s.as_array_mut());
+    let Some(obj) = body.as_object_mut() else {
+        return;
+    };
 
-    let Some(system_arr) = system else {
+    // 如果没有 "system" 字段，创建空数组
+    if !obj.contains_key("system") {
+        obj.insert("system".to_string(), Value::Array(vec![]));
+    }
+
+    let Some(system_arr) = obj.get_mut("system").and_then(|s| s.as_array_mut()) else {
         return;
     };
 
