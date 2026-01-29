@@ -1,8 +1,6 @@
 //! Anthropic Claude Code 伪装模块
 //!
-//! 绕过 Anthropic Claude Code 相关检测：
-//! - 伪装 system 提示词：替换 OpenCode -> Claude Code，注入官方身份标识
-//! - 伪装 tool 名称：映射 tool 名称，响应时还原
+//! 在 system 提示词开头注入 Claude Code 官方身份标识，并处理工具名称映射
 
 use serde_json::Value;
 
@@ -12,12 +10,33 @@ const CLAUDE_CODE_SYSTEM_PROMPT: &str = "You are Claude Code, Anthropic's offici
 /// Claude Code 身份前缀（用于检测是否已包含官方身份）
 const CLAUDE_CODE_IDENTITY_PREFIX: &str = "You are Claude Code";
 
+/// 未知工具前缀
+const UNKNOWN_TOOL_PREFIX: &str = "mcp_";
+
+/// OpenCode → Claude Code 工具名称映射
+const TOOL_MAPPINGS: &[(&str, &str)] = &[
+    ("bash", "Bash"),
+    ("edit", "Edit"),
+    ("glob", "Glob"),
+    ("grep", "Grep"),
+    ("question", "AskUserQuestion"),
+    ("read", "Read"),
+    ("skill", "Skill"),
+    ("task", "Task"),
+    ("todoread", "TodoRead"),
+    ("todowrite", "TodoWrite"),
+    ("websearch", "WebSearch"),
+    ("codesearch", "CodeSearch"),
+    ("webfetch", "WebFetch"),
+    ("write", "Write"),
+];
+
 /// 伪装 system 提示词
 ///
 /// 在 system 数组开头注入官方身份标识
-pub fn spoof_system(body: &mut Value) {
+pub fn spoof_system(body: &mut Value) -> bool {
     let Some(obj) = body.as_object_mut() else {
-        return;
+        return false;
     };
 
     // 如果没有 "system" 字段，创建空数组
@@ -26,7 +45,7 @@ pub fn spoof_system(body: &mut Value) {
     }
 
     let Some(system_arr) = obj.get_mut("system").and_then(|s| s.as_array_mut()) else {
-        return;
+        return false;
     };
 
     // 确保首个 block 为官方身份标识
@@ -51,184 +70,121 @@ pub fn spoof_system(body: &mut Value) {
             }),
         );
     }
+
+    let is_third_party_client = system_arr.iter().any(|item| {
+        item.get("text")
+            .and_then(|text| text.as_str())
+            .is_some_and(|text| text.contains("opencode") || text.contains("OpenCode"))
+    });
+
+    is_third_party_client
 }
 
-/// 默认前缀
-const DEFAULT_PREFIX: &str = "cc_";
+/// 将第三方工具名映射为 Claude Code 工具名
+fn map_tool_name(name: &str) -> String {
+    TOOL_MAPPINGS
+        .iter()
+        .find(|(from, _)| *from == name)
+        .map(|(_, to)| to.to_string())
+        .unwrap_or_else(|| format!("{}{}", UNKNOWN_TOOL_PREFIX, name))
+}
 
-/// Claude Code 官方工具名称
-const CC_TOOLS: &[&str] = &[
-    "AskUserQuestion",
-    "Bash",
-    "Edit",
-    "EnterPlanMode",
-    "ExitPlanMode",
-    "Glob",
-    "Grep",
-    "NotebookEdit",
-    "Read",
-    "Skill",
-    "Task",
-    "TaskCreate",
-    "TaskGet",
-    "TaskList",
-    "TaskOutput",
-    "TaskStop",
-    "TaskUpdate",
-    "WebFetch",
-    "WebSearch",
-    "Write",
-];
+/// 将 Claude Code 工具名还原为第三方工具名
+fn unmap_tool_name(name: &str) -> String {
+    TOOL_MAPPINGS
+        .iter()
+        .find(|(_, to)| *to == name)
+        .map(|(from, _)| from.to_string())
+        .unwrap_or_else(|| {
+            name.strip_prefix(UNKNOWN_TOOL_PREFIX)
+                .unwrap_or(name)
+                .to_string()
+        })
+}
 
-/// 第三方客户端 → Claude Code 名称映射
-const MAPPINGS: &[(&str, &str)] = &[
-    ("bash", "Bash"),
-    ("edit", "Edit"),
-    ("glob", "Glob"),
-    ("grep", "Grep"),
-    ("question", "AskUserQuestion"),
-    ("read", "Read"),
-    ("skill", "Skill"),
-    ("task", "Task"),
-    ("todowrite", "TodoWrite"),
-    ("webfetch", "WebFetch"),
-    ("write", "Write"),
-];
-
-/// 伪装请求中的 tool 名称
-///
-/// 处理：
-/// 1. tools 数组中的 tool 定义
-/// 2. messages 中的 tool_use 块
-///
-/// 返回是否发生名称变换
-pub fn spoof_tools(mut request: Value) -> (Value, bool) {
-    let obj = match request.as_object_mut() {
-        Some(obj) => obj,
-        None => return (request, false),
+/// 映射请求体中的工具名称（第三方 → Claude Code）
+pub fn map_request_tools(body: &mut Value) {
+    let Some(obj) = body.as_object_mut() else {
+        return;
     };
-    let mut changed = false;
 
-    // 处理 tools 数组
+    // 映射 tools 定义
     if let Some(tools) = obj.get_mut("tools").and_then(|t| t.as_array_mut()) {
         for tool in tools {
-            if transform_name(tool, to_spoofed) {
-                changed = true;
+            if let Some(name) = tool
+                .get_mut("name")
+                .and_then(|n| n.as_str())
+                .map(map_tool_name)
+            {
+                tool["name"] = Value::String(name);
             }
         }
     }
 
-    // 处理 messages 中的 tool_use 块
+    // 映射 messages 中的 tool_use blocks
     if let Some(messages) = obj.get_mut("messages").and_then(|m| m.as_array_mut()) {
         for msg in messages {
-            if let Some(content) = msg.get_mut("content").and_then(|c| c.as_array_mut()) {
-                for block in content {
-                    if is_tool_use_block(block) && transform_name(block, to_spoofed) {
-                        changed = true;
+            let Some(content) = msg.get_mut("content").and_then(|c| c.as_array_mut()) else {
+                continue;
+            };
+            for block in content {
+                if block.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
+                    if let Some(name) = block
+                        .get("name")
+                        .and_then(|n| n.as_str())
+                        .map(map_tool_name)
+                    {
+                        block["name"] = Value::String(name);
+                    }
+                }
+                if block.get("type").and_then(|t| t.as_str()) == Some("tool_result") {
+                    if let Some(name) = block
+                        .get("name")
+                        .and_then(|n| n.as_str())
+                        .map(map_tool_name)
+                    {
+                        block["name"] = Value::String(name);
                     }
                 }
             }
         }
     }
-
-    (request, changed)
 }
 
-/// 还原响应中的 tool 名称
-///
-/// 处理 content 数组中的 tool_use 块
-pub fn restore_tools(response: &mut Value) {
-    let content = response
-        .as_object_mut()
-        .and_then(|obj| obj.get_mut("content"))
-        .and_then(|c| c.as_array_mut());
-
-    if let Some(content) = content {
-        for item in content {
-            transform_name(item, to_original);
-        }
-    }
-}
-
-/// 还原 SSE 文本中的 tool 名称
-///
-/// 使用正则替换，适用于流式响应
-pub fn restore_tools_text(text: &str) -> String {
-    let mut result = text.to_string();
-
-    // 还原显式映射
-    for (original, spoofed) in MAPPINGS {
-        let pattern = format!(r#""name"\s*:\s*"{}""#, regex::escape(spoofed));
-        let replacement = format!(r#""name": "{}""#, original);
-        if let Ok(re) = regex::Regex::new(&pattern) {
-            result = re.replace_all(&result, replacement.as_str()).to_string();
-        }
-    }
-
-    // 还原 cc_ 前缀（跳过已由显式映射处理的）
-    let prefix_pattern = format!(r#""name"\s*:\s*"{}([^"]+)""#, DEFAULT_PREFIX);
-    if let Ok(re) = regex::Regex::new(&prefix_pattern) {
-        result = re.replace_all(&result, r#""name": "$1""#).to_string();
-    }
-
-    result
-}
-
-/// 检查是否为 tool_use 块
-fn is_tool_use_block(block: &Value) -> bool {
-    block.get("type").and_then(|t| t.as_str()) == Some("tool_use")
-}
-
-/// 转换 name 字段
-fn transform_name(item: &mut Value, transformer: fn(&str) -> String) -> bool {
-    let obj = match item.as_object_mut() {
-        Some(obj) => obj,
-        None => return false,
+/// 还原响应体中的工具名称（Claude Code → 第三方）
+pub fn unmap_response_tools(body: &mut Value) {
+    let Some(obj) = body.as_object_mut() else {
+        return;
     };
 
-    if let Some(name) = obj.get("name").and_then(|n| n.as_str()) {
-        let new_name = transformer(name);
-        if new_name != name {
-            obj.insert("name".to_string(), Value::String(new_name));
-            return true;
+    // 还原 content 中的 tool_use blocks
+    if let Some(content) = obj.get_mut("content").and_then(|c| c.as_array_mut()) {
+        for block in content {
+            if block.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
+                if let Some(name) = block
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .map(unmap_tool_name)
+                {
+                    block["name"] = Value::String(name);
+                }
+            }
         }
-    }
-    false
-}
-
-/// 将原始名称转换为伪装名称
-fn to_spoofed(name: &str) -> String {
-    // 显式映射
-    for (original, spoofed) in MAPPINGS {
-        if name == *original {
-            return spoofed.to_string();
-        }
-    }
-
-    // 已是 CC 工具名称
-    if CC_TOOLS.contains(&name) {
-        return name.to_string();
-    }
-
-    // 默认：添加前缀（跳过已有前缀的）
-    if name.starts_with(DEFAULT_PREFIX) {
-        name.to_string()
-    } else {
-        format!("{DEFAULT_PREFIX}{name}")
     }
 }
 
-/// 将伪装名称还原为原始名称
-fn to_original(name: &str) -> String {
-    // 显式映射
-    for (original, spoofed) in MAPPINGS {
-        if name == *spoofed {
-            return original.to_string();
+/// 还原流式响应中的工具名称（content_block_start 事件）
+pub fn unmap_stream_tool(event_data: &mut Value) {
+    // content_block_start: { type, index, content_block: { type: "tool_use", name, id } }
+    if let Some(block) = event_data.get_mut("content_block") {
+        if block.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
+            if let Some(name) = block
+                .get("name")
+                .and_then(|n| n.as_str())
+                .map(unmap_tool_name)
+            {
+                block["name"] = Value::String(name);
+            }
         }
     }
-
-    // 默认：移除前缀
-    name.strip_prefix(DEFAULT_PREFIX)
-        .unwrap_or(name)
-        .to_string()
 }

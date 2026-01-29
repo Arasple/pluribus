@@ -212,16 +212,20 @@ impl ClaudeCodeProvider {
         request
     }
 
-    /// 发送请求的公共逻辑
+    /// 发送请求的公共逻辑，返回 (Response, 是否第三方客户端)
     async fn send_request(
         &self,
-        request: Value,
+        mut request: Value,
         stream: bool,
     ) -> Result<(reqwest::Response, bool)> {
         let access_token = self.get_valid_token().await?;
 
-        // 伪装 tool 名称，绕过 Anthropic 检测
-        let (request, spoofed) = anthropic_spoof::spoof_tools(request);
+        // 伪装 system 提示词，检测是否第三方客户端
+        let is_third_party = anthropic_spoof::spoof_system(&mut request);
+        if is_third_party {
+            anthropic_spoof::map_request_tools(&mut request);
+        }
+
         // 先从原始 request 构建 headers（包含透传的 headers）
         let headers = build_headers(&access_token, &request)?;
         // 再处理 body（会移除内部字段）
@@ -246,7 +250,7 @@ impl ClaudeCodeProvider {
             self.update_rate_limit(response.headers());
         }
 
-        Ok((response, spoofed))
+        Ok((response, is_third_party))
     }
 }
 
@@ -267,7 +271,7 @@ impl Provider for ClaudeCodeProvider {
     }
 
     async fn send_message(&self, request: Value) -> Result<Value> {
-        let (response, spoofed) = self.send_request(request, false).await?;
+        let (response, is_third_party) = self.send_request(request, false).await?;
         let status = response.status();
         let mut response_json: Value = response
             .json()
@@ -283,15 +287,17 @@ impl Provider for ClaudeCodeProvider {
             );
         }
 
-        if spoofed {
-            anthropic_spoof::restore_tools(&mut response_json);
+        // 第三方客户端需要还原工具名
+        if is_third_party {
+            anthropic_spoof::unmap_response_tools(&mut response_json);
         }
+
         Ok(response_json)
     }
 
     async fn send_streaming(&self, request: Value) -> Result<StreamingResponse> {
         let model = extract_model(&request);
-        let (response, spoofed) = self.send_request(request, true).await?;
+        let (response, is_third_party) = self.send_request(request, true).await?;
         let status = response.status();
 
         if !status.is_success() {
@@ -313,7 +319,7 @@ impl Provider for ClaudeCodeProvider {
         let provider_name = self.name.clone();
 
         tokio::spawn(async move {
-            relay_stream(byte_stream, tx, &provider_name, &model, spoofed).await;
+            relay_stream(byte_stream, tx, &provider_name, &model, is_third_party).await;
         });
 
         let stream = Box::new(tokio_stream::wrappers::ReceiverStream::new(rx));
@@ -386,7 +392,7 @@ async fn relay_stream(
     tx: mpsc::Sender<std::result::Result<Bytes, std::io::Error>>,
     provider: &str,
     model: &str,
-    spoofed: bool,
+    is_third_party: bool,
 ) {
     let mut buffer = String::new();
     let mut pinned = Box::pin(upstream);
@@ -399,36 +405,16 @@ async fn relay_stream(
 
                 while let Some(pos) = buffer.find("\n\n") {
                     let event = &buffer[..pos];
-                    // 还原 SSE 事件中的 tool 名称
-                    let event = if spoofed {
-                        anthropic_spoof::restore_tools_text(event)
+
+                    // 处理 SSE 事件
+                    let output_event = if is_third_party {
+                        transform_sse_event(event, &mut usage)
                     } else {
+                        extract_usage_from_event(event, &mut usage);
                         event.to_string()
                     };
-                    let event_with_newlines = format!("{}\n\n", event);
 
-                    // 解析 SSE 事件提取 usage
-                    for line in event.lines() {
-                        if let Some(data) = parse_sse_data(line) {
-                            if let Some(event_type) = data.get("type").and_then(|t| t.as_str()) {
-                                match event_type {
-                                    "message_start" => {
-                                        if let Some(msg) = data.get("message") {
-                                            if let Ok(parsed_usage) = parse_anthropic_usage(msg) {
-                                                usage.merge_from(&parsed_usage);
-                                            }
-                                        }
-                                    }
-                                    "message_delta" => {
-                                        if let Ok(parsed_usage) = parse_anthropic_usage(&data) {
-                                            usage.merge_from(&parsed_usage);
-                                        }
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        }
-                    }
+                    let event_with_newlines = format!("{}\n\n", output_event);
 
                     if tx.send(Ok(Bytes::from(event_with_newlines))).await.is_err() {
                         tracing::debug!("client disconnected");
@@ -448,15 +434,9 @@ async fn relay_stream(
     }
 
     if !buffer.is_empty() {
-        let buffer = if spoofed {
-            anthropic_spoof::restore_tools_text(&buffer)
-        } else {
-            buffer
-        };
         let _ = tx.send(Ok(Bytes::from(buffer))).await;
     }
 
-    // 流结束时记录 usage
     tracing::info!(
         provider,
         model,
@@ -466,4 +446,67 @@ async fn relay_stream(
         cache_write = usage.cache_creation_tokens,
         "stream completed"
     );
+}
+
+/// 提取 SSE 事件中的 usage 信息（不修改事件）
+fn extract_usage_from_event(event: &str, usage: &mut Usage) {
+    for line in event.lines() {
+        if let Some(data) = parse_sse_data(line) {
+            if let Some(event_type) = data.get("type").and_then(|t| t.as_str()) {
+                match event_type {
+                    "message_start" => {
+                        if let Some(msg) = data.get("message") {
+                            if let Ok(parsed_usage) = parse_anthropic_usage(msg) {
+                                usage.merge_from(&parsed_usage);
+                            }
+                        }
+                    }
+                    "message_delta" => {
+                        if let Ok(parsed_usage) = parse_anthropic_usage(&data) {
+                            usage.merge_from(&parsed_usage);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
+/// 转换 SSE 事件（提取 usage 并还原工具名）
+fn transform_sse_event(event: &str, usage: &mut Usage) -> String {
+    let mut lines: Vec<String> = Vec::new();
+
+    for line in event.lines() {
+        if let Some(mut data) = parse_sse_data(line) {
+            if let Some(event_type) = data.get("type").and_then(|t| t.as_str()) {
+                match event_type {
+                    "message_start" => {
+                        if let Some(msg) = data.get("message") {
+                            if let Ok(parsed_usage) = parse_anthropic_usage(msg) {
+                                usage.merge_from(&parsed_usage);
+                            }
+                        }
+                    }
+                    "message_delta" => {
+                        if let Ok(parsed_usage) = parse_anthropic_usage(&data) {
+                            usage.merge_from(&parsed_usage);
+                        }
+                    }
+                    "content_block_start" => {
+                        anthropic_spoof::unmap_stream_tool(&mut data);
+                    }
+                    _ => {}
+                }
+            }
+            lines.push(format!(
+                "data: {}",
+                serde_json::to_string(&data).unwrap_or_default()
+            ));
+        } else {
+            lines.push(line.to_string());
+        }
+    }
+
+    lines.join("\n")
 }
