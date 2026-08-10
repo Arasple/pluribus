@@ -1,3 +1,5 @@
+
+
 # Pluribus
 
 [![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org/)
@@ -70,13 +72,22 @@ curl http://localhost:8080/health
 
 Returns service status and rate limit info for all accounts.
 
+### Test Command
+
+```bash
+pluribus test
+```
+
+Sends a test request to the local server to verify it is running correctly.
+
 ## Configuration
 
-| Variable          | Default   | Description               |
-| ----------------- | --------- | ------------------------- |
-| `PLURIBUS_HOST`   | `0.0.0.0` | Listen address            |
-| `PLURIBUS_PORT`   | `8080`    | Listen port               |
-| `PLURIBUS_SECRET` | -         | API access key (required) |
+| Variable          | Default   | Description                         |
+| ----------------- | --------- | ----------------------------------- |
+| `PLURIBUS_HOST`   | `0.0.0.0` | Listen address                      |
+| `PLURIBUS_PORT`   | `8080`    | Listen port                         |
+| `PLURIBUS_SECRET` | -         | API access key (required)           |
+| `PLURIBUS_ENV_FILE` | -      | Custom `.env` file path (optional)  |
 
 Account credentials are stored in `./providers/*.toml`.
 
